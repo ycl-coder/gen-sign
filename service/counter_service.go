@@ -1,6 +1,9 @@
 package service
 
 import (
+	"crypto/hmac"
+	"crypto/sha1"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -30,38 +33,40 @@ func IndexHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, data)
 }
 
+type Request struct {
+	StringToSign string `json:"stringToSign"`
+	SecretKey    string `json:"secretKey"`
+}
+
+type Response struct {
+	Signature string `json:"signature"`
+	Error     string `json:"error,omitempty"`
+}
+
+func respondError(w http.ResponseWriter, message string, code int) {
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(Response{Error: message})
+}
+
 // CounterHandler 计数器接口
 func CounterHandler(w http.ResponseWriter, r *http.Request) {
-	res := &JsonResult{}
-
-	if r.Method == http.MethodGet {
-		counter, err := getCurrentCounter()
-		if err != nil {
-			res.Code = -1
-			res.ErrorMsg = err.Error()
-		} else {
-			res.Data = counter.Count
-		}
-	} else if r.Method == http.MethodPost {
-		count, err := modifyCounter(r)
-		if err != nil {
-			res.Code = -1
-			res.ErrorMsg = err.Error()
-		} else {
-			res.Data = count
-		}
-	} else {
-		res.Code = -1
-		res.ErrorMsg = fmt.Sprintf("请求方法 %s 不支持", r.Method)
-	}
-
-	msg, err := json.Marshal(res)
-	if err != nil {
-		fmt.Fprint(w, "内部错误")
+	var req Request
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-	w.Header().Set("content-type", "application/json")
-	w.Write(msg)
+
+	if req.StringToSign == "" || req.SecretKey == "" {
+		respondError(w, "Missing parameters", http.StatusBadRequest)
+		return
+	}
+
+	// 生成 HMAC-SHA1 签名
+	h := hmac.New(sha1.New, []byte(req.SecretKey))
+	h.Write([]byte(req.StringToSign))
+	signature := base64.StdEncoding.EncodeToString(h.Sum(nil))
+
+	json.NewEncoder(w).Encode(Response{Signature: signature})
 }
 
 // modifyCounter 更新计数，自增或者清零
